@@ -1,0 +1,89 @@
+---
+title: "Лабораторная №1"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+---
+
+# Расчёт ошибки модели для непрерывного $Y$
+
+Исходные данные сгенерированы искуственно.
+
+```{r first-block}
+# ядро
+my.seed <- 1486372882
+
+# наблюдений всего
+n.all <- 60
+# доля обучающей выборки
+train.percent <- 0.85
+# стандартное отклонение случайного шума
+res.sd <- 1
+# границы изменения X
+x.min <- 5
+x.max <- 105
+
+# фактические значения x
+set.seed(my.seed)
+x <- runif(x.min, x.max, n = n.all)
+x[1:5]
+# случайный шум
+set.seed(my.seed)
+res <- rnorm(mean = 0, sd = res.sd, n = n.all)
+res[1:5]
+# отбираем наблюдения в обучающую выборку
+set.seed(my.seed)
+inTrain <- sample(seq_along(x), size = train.percent * n.all)
+inTrain[1:5]
+# истинная функция взаимосвязи 
+y.func <- function(x) {4 - 2e-02*x + 5.5e-03*x^2 - 4.9e-05*x^3}
+
+# для графика истинной взаимосвязи
+x.line <- seq(x.min, x.max, length = n.all)
+y.line <- y.func(x.line)
+
+# фактические значения y (с шумом)
+y <- y.func(x) + res
+
+# Создаём векторы с данными для построения графиков ############################
+
+# наблюдения на обучающей выборке
+x.train <- x[inTrain]
+y.train <- y[inTrain]
+length(x.train)
+# наблюдения на тестовой выборке
+x.test <- x[-inTrain]
+y.test <- y[-inTrain]
+length(x.test)
+
+# убираем широкие поля рисунка
+par(mar = c(4, 4, 1, 1))
+
+# наименьшие/наибольшие значения по осям
+x.lim <- c(x.min, x.max)
+y.lim <- c(min(y), max(y))
+
+# наблюдения с шумом (обучающая выборка)
+plot(x.train, y.train, 
+     col = grey(0.2), bg = grey(0.2), pch = 21,
+     xlab = 'X', ylab = 'Y', 
+     xlim = x.lim, ylim = y.lim, 
+     cex = 1.2, cex.lab = 1.2, cex.axis = 1.2)
+
+# наблюдения тестовой выборки
+points(x.test, y.test,
+       col = 'red', bg = 'red', pch = 21)
+
+# истинная функция
+lines(x.line, y.line,
+      lwd = 2, lty = 2)
+
+# легенда
+legend('topleft', legend = c('обучение', 'тест', 'f(X)'),
+       pch = c(16, 16, NA), 
+       col = c(grey(0.2), 'red', 'black'),  
+       lty = c(0, 0, 2), lwd = c(1, 1, 2), cex = 1.2)
+```
+
+
