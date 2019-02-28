@@ -1,0 +1,445 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+  word_document: default
+---
+
+## Математическое моделирование
+
+### Практика 3
+
+### Параметрические классификаторы для бинарной зависимой переменной ($Y$)
+
+В практических примерах ниже показано:   
+
+* как построить модель логистической регрессии   
+* как построить модель линейного дискриминантного анализа (LDA)   
+* как построить модель квадратичного дискриминантного анализа (QDA)   
+* как изменять границу отсечения вероятности для классов
+* как построить ROC-кривую   
+
+```{r, message = F, include = F, message = F}
+library('ISLR')
+library('GGally')
+library('MASS')
+```
+
+*Модели*: логистическая регрессия, LDA, QDA.   
+*Данные*: сгенерированный набор по кредитным картам ```Default{ISLR}```. В наборе `r nrow(Default)` наблюдений и `r ncol(Default)` показателя:   
+* `default` -- бинарная переменная: если Yes, держатель карты не вернул долг по кредитке;   
+* `student` -- бинарная переменная: если Yes, держатель карты является студентом;   
+* `balance` -- средний баланс, который оставался на балансе кредитной карты, после ежемесячного платежа;   
+* `income` -- доход держателя карты.   
+
+*Пакеты*:   
+```{r, message = F, eval = F}
+library('ISLR')
+library('GGally')
+library('MASS')
+```
+
+Зададим ядро генератора случайных чисел и объём обучающей выборки.    
+
+```{r}
+my.seed <- 12345
+train.percent <- 0.85
+
+options("ggmatrix.progress.bar" = FALSE)
+```
+
+# Исходные данные: набор Default
+
+```{r, fig.height = 5, fig.width = 5, message = F, warning = F}
+# ?Default   # справка по набору данных
+head(Default)
+str(Default)
+
+# графики разброса
+ggp <- ggpairs(Default)
+print(ggp, progress = FALSE)
+```
+
+Обратите внимание: априорные вероятности классов, которые можно оценить как доли наблюдений каждого класса в выборке, неодинаковы. Неплательщиков (`default == 1`) намного меньше:   
+
+```{r}
+# доли наблюдений в столбце default
+table(Default$default) / sum(table(Default$default))
+```
+
+Доля наименьшего класса, в данном случае 0.0333, это ошибка нулевого классификатора: если бы мы прогнозировали default = Yes для всех наблюдений, ровно в такой доле случаев мы бы ошиблись. Точность моделей целесообразно будет сравнивать с этой величиной.    
+Мы построим простые модели, используя всего один объясняющий фактор: `balance`.   
+
+# Отбираем наблюдения в обучающую выборку
+
+```{r}
+set.seed(my.seed)
+inTrain <- sample(seq_along(Default$default),
+                  nrow(Default)*train.percent)
+df <- Default[inTrain, ]
+
+# фактические значения на обучающей выборке
+Факт <- df$default
+```
+
+# Строим модели, чтобы спрогнозировать default
+
+## Логистическая регрессия
+
+```{r}
+model.logit <- glm(default ~ balance, data = df, family = 'binomial')
+summary(model.logit)
+```
+
+Параметры модели логистической регрессии значимы с вероятностью 0.99.   
+
+```{r}
+# прогноз: вероятности принадлежности классу 'Yes' (дефолт)
+p.logit <- predict(model.logit, df, type = 'response')
+Прогноз <- factor(ifelse(p.logit > 0.5, 2, 1),
+                  levels = c(1, 2),
+                  labels = c('No', 'Yes'))
+
+# матрица неточностей
+conf.m <- table(Факт, Прогноз)
+conf.m
+```
+
+Обратите внимание: вектор p.logit состоит из вероятностей принадлежности наблюдений к классам, а не из меток этих классов. Поэтому для прогноза нужно сделать разделение на два класса вручную, используя какую-то границу отсечения. В данном случае это 0.5 -- значение по умолчанию. У этой модели низкая чувствительность:   
+
+```{r}
+# чувствительность
+conf.m[2, 2] / sum(conf.m[2, ])
+# специфичность
+conf.m[1, 1] / sum(conf.m[1, ])
+# верность
+sum(diag(conf.m)) / sum(conf.m)
+```
+
+
+## LDA
+
+```{r}
+model.lda <- lda(default ~ balance, data = Default[inTrain, ])
+model.lda
+
+# прогноз: вероятности принадлежности классу 'Yes' (дефолт)
+p.lda <- predict(model.lda, df, type = 'response')
+Прогноз <- factor(ifelse(p.lda$posterior[, 'Yes'] > 0.5, 
+                         2, 1),
+                  levels = c(1, 2),
+                  labels = c('No', 'Yes'))
+
+# матрица неточностей
+conf.m <- table(Факт, Прогноз)
+conf.m
+```
+
+Отчёт по модели LDA содержит три раздела: априарные вероятности классов (Prior probabilities of groups), групповые средние объясняющих переменных (Group means) и коэффициенты линейной разделяющей границы (Coefficients of linear discriminants).   
+У этой модели чувствительность ещё меньше.   
+
+```{r}
+# чувствительность
+conf.m[2, 2] / sum(conf.m[2, ])
+# специфичность
+conf.m[1, 1] / sum(conf.m[1, ])
+# верность
+sum(diag(conf.m)) / sum(conf.m)
+```
+
+## QDA
+
+```{r}
+model.qda <- qda(default ~ balance, data = Default[inTrain, ])
+model.qda
+
+# прогноз: вероятности принадлежности классу 'Yes' (дефолт)
+p.qda <- predict(model.qda, df, type = 'response')
+Прогноз <- factor(ifelse(p.qda$posterior[, 'Yes'] > 0.5, 
+                         2, 1),
+                  levels = c(1, 2),
+                  labels = c('No', 'Yes'))
+
+# матрица неточностей
+conf.m <- table(Факт, Прогноз)
+conf.m
+```
+
+Разделяющая граница квадратичного дисперсионного анализа нелинейна, поэтому коэффициентов в отчёте мы не видим. Чувсивительность чуть хуже, чем у логистичесокй регрессии.   
+
+```{r}
+# чувствительность
+conf.m[2, 2] / sum(conf.m[2, ])
+# специфичность
+conf.m[1, 1] / sum(conf.m[1, ])
+# верность
+sum(diag(conf.m)) / sum(conf.m)
+```
+
+Очевидно, такая ситуация с чувствительностью не может нас устраивать, поскольку высокое значение верности модели (accuracy) обусловлено исключительно большой долей одного из классов в выборке. В такой ситуации надо пожертвовать небольшой частью специфичности, чтобы подтянуть чувствительность. Сделаем это, изменив границу отсечения классов.     
+
+# Подбор границы отсечения вероятностей классов
+
+## ROC-кривая для LDA
+
+Для начала построим график совместного изменения чувствительности и специфичности с изменением вероятности отсечения от 0 до 1 -- ROC-кривую. Для примера возьмём модель LDA.  
+
+```{r, fig.width = 5, fig.height = 5, message = F, warning = F}
+# считаем 1-SPC и TPR для всех вариантов границы отсечения
+x <- NULL    # для (1 - SPC)
+y <- NULL    # для TPR
+
+# заготовка под матрицу неточностей
+tbl <- as.data.frame(matrix(rep(0, 4), 2, 2))
+rownames(tbl) <- c('fact.No', 'fact.Yes')
+colnames(tbl) <- c('predict.No', 'predict.Yes')
+
+# вектор вероятностей для перебора
+p.vector <- seq(0, 1, length = 501)
+
+# цикл по вероятностям отсечения
+for (p in p.vector){
+    # прогноз
+    Прогноз <- factor(ifelse(p.lda$posterior[, 'Yes'] > p, 
+                             2, 1),
+                      levels = c(1, 2),
+                      labels = c('No', 'Yes'))
+    
+    # фрейм со сравнением факта и прогноза
+    df.compare <- data.frame(Факт = Факт, Прогноз = Прогноз)
+    
+    # заполняем матрицу неточностей
+    tbl[1, 1] <- nrow(df.compare[df.compare$Факт == 'No' & df.compare$Прогноз == 'No', ])
+    tbl[2, 2] <- nrow(df.compare[df.compare$Факт == 'Yes' & df.compare$Прогноз == 'Yes', ])
+    tbl[1, 2] <- nrow(df.compare[df.compare$Факт == 'No' & df.compare$Прогноз == 'Yes', ])
+    tbl[2, 1] <- nrow(df.compare[df.compare$Факт == 'Yes' & df.compare$Прогноз == 'No', ])
+    
+    # считаем характеристики
+    TPR <- tbl[2, 2] / sum(tbl[2, 2] + tbl[2, 1])
+    y <- c(y, TPR)
+    SPC <- tbl[1, 1] / sum(tbl[1, 1] + tbl[1, 2])
+    x <- c(x, 1 - SPC)
+}
+
+# строим ROC-кривую
+par(mar = c(5, 5, 1, 1))
+# кривая
+plot(x, y, type = 'l', col = 'blue', lwd = 3,
+     xlab = '(1 - SPC)', ylab = 'TPR', 
+     xlim = c(0, 1), ylim = c(0, 1))
+# прямая случайного классификатора
+abline(a = 0, b = 1, lty = 3, lwd = 2)
+
+# точка для вероятности 0.5
+points(x[p.vector == 0.5], y[p.vector == 0.5], pch = 16)
+text(x[p.vector == 0.5], y[p.vector == 0.5], 'p = 0.5', pos = 4)
+# точка для вероятности 0.2
+points(x[p.vector == 0.2], y[p.vector == 0.2], pch = 16)
+text(x[p.vector == 0.2], y[p.vector == 0.2], 'p = 0.2', pos = 4)
+```
+
+Видно, что изменение границы отсечения с 0.5 до 0.2 увеличивает чувствительность модели почти в три раза, в то время как специфичность ухудшается незначительно. Матрица неточностей и её характеристики для LDA с p = 0.2:   
+
+```{r}
+Прогноз <- factor(ifelse(p.lda$posterior[, 'Yes'] > 0.2, 
+                             2, 1),
+                      levels = c(1, 2),
+                      labels = c('No', 'Yes'))
+
+conf.m <- table(Факт, Прогноз)
+conf.m
+
+# чувствительность
+conf.m[2, 2] / sum(conf.m[2, ])
+# специфичность
+conf.m[1, 1] / sum(conf.m[1, ])
+# верность
+sum(diag(conf.m)) / sum(conf.m)
+```
+
+
+## Упражнение 3   
+
+На наборе данных из своего варианта построить указанные модели для прогноза бинарной зависимой переменной. Доля обучающей выборки – 75%.    
+
+Построить три графика:   
+1. Матричный график взаимного разброса переменных модели (ggpairs).   
+1. Две ROC-кривые на одних осях: сравнение качества прогноза сравниваемых моделей на обучающей выборке.   
+1. Две ROC-кривые на одних осях: сравнение качества прогноза сравниваемых моделей на тестовой выборке.   
+
+В конце файла с кодом в комментарии сравнить модели по качеству с помощью ROC-кривых. Сделать предположение о том, что в данном случае повлияло на преимущество одного метода над другим.     
+Скрипт решения и графики разместить в репозитории на github, прислать ссылку на почту преподавателя.
+
+## Варианты   
+
+<table border="1">
+
+<tr>
+<td><b>Вариант</b></td>
+<td><b>Ядро для `set.seed()`</b></td>
+<td><b>Данные</b></td>
+<td><b>Зависимая переменная</b></td>
+<td><b>Объясняющие переменные</b></td>
+<td><b>Методы</b></td>
+</tr>
+
+<tr>
+<td>1</td>
+<td>123</td>
+<td>Default{ISLR} -- долги по кредитным картам</td>
+<td>default </br> (Yes -- наличие признака, No -- отсутствие)</td>
+<td>все остальные</td>
+<td>Логистическая регрессия, LDA</td>
+</tr>
+
+<tr>
+<td>2</td>
+<td>123</td>
+<td>titanic_train{titanic} -- выжившие в катастрофе Титаника</td>
+<td>survived</td>
+<td>все остальные, кроме name</td>
+<td>Логистическая регрессия, LDA</td>
+</tr>
+
+<tr>
+<td>3</td>
+<td>123</td>
+<td>PimaIndiansDiabetes{mlbench} -- случаи диабета у женщин индейского племени Пима</td>
+<td>diabetes </br>(pos -- наличие признака, neg -- отсутствие)</td>
+<td>все остальные</td>
+<td>Логистическая регрессия, LDA</td>
+</tr>
+
+<tr>
+<td>4</td>
+<td>123</td>
+<td>Glass{mlbench} -- химический состав разных типов стекла</td>
+<td>Type </br>(1 -- наличие признака, все остальные -- отсутствие)</td>
+<td>все остальные</td>
+<td>Логистическая регрессия, LDA</td>
+</tr>
+
+<tr>
+<td>5</td>
+<td>234</td>
+<td>Default{ISLR} -- долги по кредитным картам</td>
+<td>default </br> (Yes -- наличие признака, No -- отсутствие)</td>
+<td>все остальные</td>
+<td>Логистическая регрессия, QDA</td>
+</tr>
+
+<tr>
+<td>6</td>
+<td>234</td>
+<td>titanic_train{titanic} -- выжившие в катастрофе Титаника</td>
+<td>survived</td>
+<td>все остальные, кроме name</td>
+<td>Логистическая регрессия, QDA</td>
+</tr>
+
+<tr>
+<td>7</td>
+<td>234</td>
+<td>PimaIndiansDiabetes{mlbench} -- случаи диабета у женщин индейского племени Пима</td>
+<td>diabetes </br>(pos -- наличие признака, neg -- отсутствие)</td>
+<td>все остальные</td>
+<td>Логистическая регрессия, QDA</td>
+</tr>
+
+<tr>
+<td>8</td>
+<td>234</td>
+<td>Glass{mlbench} -- химический состав разных типов стекла</td>
+<td>Type </br>(1 -- наличие признака, все остальные -- отсутствие)</td>
+<td>все остальные</td>
+<td>Логистическая регрессия, QDA</td>
+</tr>
+
+
+<tr>
+<td>9</td>
+<td>345</td>
+<td>Default{ISLR} -- долги по кредитным картам</td>
+<td>default </br> (Yes -- наличие признака, No -- отсутствие)</td>
+<td>все остальные</td>
+<td>LDA, QDA</td>
+</tr>
+
+<tr>
+<td>10</td>
+<td>345</td>
+<td>titanic_train{titanic} -- выжившие в катастрофе Титаника</td>
+<td>survived</td>
+<td>все остальные, кроме name</td>
+<td>LDA, QDA</td>
+</tr>
+
+<tr>
+<td>11</td>
+<td>345</td>
+<td>PimaIndiansDiabetes{mlbench} -- случаи диабета у женщин индейского племени Пима</td>
+<td>diabetes </br>(pos -- наличие признака, neg -- отсутствие)</td>
+<td>все остальные</td>
+<td>LDA, QDA</td>
+</tr>
+
+<tr>
+<td>12</td>
+<td>345</td>
+<td>Glass{mlbench} -- химический состав разных типов стекла</td>
+<td>Type </br>(1 -- наличие признака, все остальные -- отсутствие)</td>
+<td>все остальные</td>
+<td>LDA, QDA</td>
+</tr>
+
+</table>
+
+
+### Как загрузить данные `Default`
+
+```{r}
+# install.packages('ISLR')
+library('ISLR')
+
+head(Default)
+dim(Default)
+```
+
+### Как загрузить данные `titanic_train`
+
+```{r}
+# install.packages('titanic')
+library('titanic')
+
+head(titanic_train)
+dim(titanic_train)
+```
+
+### Как загрузить данные `PimaIndiansDiabetes`
+
+```{r}
+# install.packages('mlbench')
+library('mlbench')
+
+data(PimaIndiansDiabetes)
+head(PimaIndiansDiabetes)
+dim(PimaIndiansDiabetes)
+```
+
+### Как загрузить данные `Glass`
+
+```{r}
+# install.packages('mlbench')
+library('mlbench')
+
+data(Glass)
+head(Glass)
+dim(Glass)
+```
+
+*Источники*   
+
+1. *James G., Witten D., Hastie T. and Tibshirani R.*  An Introduction to Statistical Learning with Applications in R. URL: [http://www-bcf.usc.edu/~gareth/ISL/ISLR%20First%20Printing.pdf](http://www-bcf.usc.edu/~gareth/ISL/ISLR%20First%20Printing.pdf)    
