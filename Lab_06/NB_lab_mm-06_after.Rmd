@@ -1,0 +1,567 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+  word_document: default
+---
+
+## Математическое моделирование
+
+### Практика 6
+
+### Регуляризация линейных моделей      
+
+В практических примерах ниже показано как:   
+
+* провести отбор оптимального подмножества переменных;     
+* отобрать предикторы методами пошагового включения и исключения;    
+* как построить ридж- и лассо-регрессию;   
+* как использовать снижение размерности: PCR и PLS;     
+* как применять эти методы в сочетании с кросс-валидацией.   
+
+*Модели*: линейная регрессия, ридж, лассо, PCR, PLS.   
+*Данные*: `Hitters {ISLR}`   
+
+Подробные комментарии к коду лабораторных см. в [1], глава 6.   
+
+```{r, warning = F, message = F}
+library('ISLR')              # набор данных Hitters
+library('leaps')             # функция regsubset() -- отбор оптимального 
+                             #  подмножества переменных
+library('glmnet')            # функция glmnet() -- лассо
+library('pls')               # регрессия на главные компоненты -- pcr()
+                             #  и частный МНК -- plsr()
+
+my.seed <- 1
+
+```
+
+
+Набор данных по зарплатам бейсбольных игроков `Hitters`.   
+
+```{r}
+?Hitters
+
+fix(Hitters)
+names(Hitters)
+dim(Hitters)
+```
+
+Считаем число пропусков в зависимой переменной и убираем их.   
+
+```{r}
+# считаем пропуски
+sum(is.na(Hitters$Salary))
+
+# убираем пропуски
+Hitters <- na.omit(Hitters)
+
+# проверяем результат
+dim(Hitters)
+sum(is.na(Hitters$Salary))
+```
+
+# 6.5 Лабораторная работа 1: методы отбора подмножеств переменных    
+
+## 6.5.1 Отбор оптимального подмножества
+
+```{r}
+# подгоняем модели с сочетаниями предикторов до 8 включительно
+regfit.full <- regsubsets(Salary ~ ., Hitters)
+summary(regfit.full)
+
+# подгоняем модели с сочетаниями предикторов до 19 (максимум в данных)
+regfit.full <- regsubsets(Salary ~ ., Hitters, nvmax = 19)
+reg.summary <- summary(regfit.full)
+reg.summary
+
+# структура отчёта по модели (ищем характеристики качества)
+names(reg.summary)
+
+# R^2 и скорректированный R^2
+round(reg.summary$rsq, 3)
+# на графике
+plot(1:19, reg.summary$rsq, type = 'b',
+     xlab = 'Количество предикторов', ylab = 'R-квадрат')
+# сода же добавим скорректированный R-квадрат
+points(1:19, reg.summary$adjr2, col = 'red')
+# модель с максимальным скорректированным R-квадратом
+which.max(reg.summary$adjr2)
+### 11
+points(which.max(reg.summary$adjr2), 
+       reg.summary$adjr2[which.max(reg.summary$adjr2)],
+       col = 'red', cex = 2, pch = 20)
+legend('bottomright', legend = c('R^2', 'R^2_adg'),
+      col = c('black', 'red'), lty = c(1, NA),
+      pch = c(1, 1))
+
+# C_p
+reg.summary$cp
+# число предикторов у оптимального значения критерия
+which.min(reg.summary$cp)
+### 10
+# график
+plot(reg.summary$cp, xlab = 'Число предикторов',
+     ylab = 'C_p', type = 'b')
+points(which.min(reg.summary$cp),
+       reg.summary$cp[which.min(reg.summary$cp)], 
+       col = 'red', cex = 2, pch = 20)
+# BIC
+reg.summary$bic
+# число предикторов у оптимального значения критерия
+which.min(reg.summary$bic)
+### 6
+# график
+plot(reg.summary$bic, xlab = 'Число предикторов',
+     ylab = 'BIC', type = 'b')
+points(which.min(reg.summary$bic),
+       reg.summary$bic[which.min(reg.summary$bic)], 
+       col = 'red', cex = 2, pch = 20)
+
+# метод plot для визуализации результатов
+?plot.regsubsets
+plot(regfit.full, scale = 'r2')
+plot(regfit.full, scale = 'adjr2')
+plot(regfit.full, scale = 'Cp')
+plot(regfit.full, scale = 'bic')
+
+# коэффициенты модели с наименьшим BIC
+round(coef(regfit.full, 6), 3)
+```
+
+
+## 6.5.2 Отбор путём пошагового включения и исключения переменных 
+
+### Пошаговое включение
+
+```{r}
+regfit.fwd <- regsubsets(Salary ~ ., data = Hitters,
+                         nvmax = 19, method = 'forward')
+summary(regfit.fwd)
+```
+
+### Пошаговое исключение   
+
+```{r}
+regfit.bwd <- regsubsets(Salary ~ ., data = Hitters,
+                         nvmax = 19, method = 'backward')
+summary(regfit.bwd)
+
+round(coef(regfit.full, 7), 3)
+
+round(coef(regfit.fwd, 7), 3)
+
+round(coef(regfit.bwd, 7), 3)
+```
+
+## 6.5.3 Нахождение оптимальной модели  при помощи методов проверочной выборки и перекрёстной проверки 
+
+### Метод проверочной выборки   
+
+```{r}
+set.seed(my.seed)
+train <- sample(c(T, F), nrow(Hitters), rep = T)
+test <- !train
+
+# обучаем модели
+regfit.best <- regsubsets(Salary ~ ., data = Hitters[train, ],
+                          nvmax = 19)
+# матрица объясняющих переменных модели для тестовой выборки
+test.mat <- model.matrix(Salary ~ ., data = Hitters[test, ])
+
+# вектор ошибок
+val.errors <- rep(NA, 19)
+# цикл по количеству предикторов
+for (i in 1:19){
+    coefi <- coef(regfit.best, id = i)
+    pred <- test.mat[, names(coefi)] %*% coefi
+    # записываем значение MSE на тестовой выборке в вектор
+    val.errors[i] <- mean((Hitters$Salary[test] - pred)^2)
+}
+round(val.errors, 0)
+# находим число предикторов у оптимальной модели
+which.min(val.errors)
+### 10
+# коэффициенты оптимальной модели
+round(coef(regfit.best, 10), 3)
+
+# функция для прогноза для функции regsubset()
+predict.regsubsets <- function(object, newdata, id, ...){
+    form <- as.formula(object$call[[2]])
+    mat <- model.matrix(form, newdata)
+    coefi <- coef(object, id = id)
+    xvars <- names(coefi)
+    mat[, xvars] %*% coefi
+}
+
+# набор с оптимальным количеством переменных на полном наборе данных
+regfit.best <- regsubsets(Salary ~ ., data = Hitters,
+                          nvmax = 19)
+round(coef(regfit.best, 10), 3)
+```
+
+### k-кратная кросс-валидация    
+
+```{r}
+# отбираем 10 блоков наблюдений
+k <- 10
+set.seed(my.seed)
+folds <- sample(1:k, nrow(Hitters), replace = T)
+
+# заготовка под матрицу с ошибками
+cv.errors <- matrix(NA, k, 19, dimnames = list(NULL, paste(1:19)))
+
+# заполняем матрицу в цикле по блокам данных
+for (j in 1:k){
+    best.fit <- regsubsets(Salary ~ ., data = Hitters[folds != j, ],
+                           nvmax = 19)
+    # теперь цикл по количеству объясняющих переменных
+    for (i in 1:19){
+        # модельные значения Salary
+        pred <- predict(best.fit, Hitters[folds == j, ], id = i)
+        # вписываем ошибку в матрицу
+        cv.errors[j, i] <- mean((Hitters$Salary[folds == j] - pred)^2)
+    }
+}
+
+# усредняем матрицу по каждому столбцу (т.е. по блокам наблюдений), 
+#  чтобы получить оценку MSE для каждой модели с фиксированным 
+#  количеством объясняющих переменных
+mean.cv.errors <- apply(cv.errors, 2, mean)
+round(mean.cv.errors, 0)
+
+# на графике
+plot(mean.cv.errors, type = 'b')
+points(which.min(mean.cv.errors), mean.cv.errors[which.min(mean.cv.errors)],
+       col = 'red', pch = 20, cex = 2)
+
+# перестраиваем модель с 11 объясняющими переменными на всём наборе данных
+reg.best <- regsubsets(Salary ~ ., data = Hitters, nvmax = 19)
+round(coef(reg.best, 11), 3)
+```
+
+# Лабораторная работа 2: гребневая регрессия и лассо    
+
+```{r}
+# из-за синтаксиса glmnet() формируем явно матрицу объясняющих...
+x <- model.matrix(Salary ~ ., Hitters)[, -1]
+
+# и вектор значений зависимой переменной
+y <- Hitters$Salary
+```
+
+## 6.6.1 Гребневая регрессия   
+
+```{r}
+# вектор значений гиперпараметра лямбда
+grid <- 10^seq(10, -2, length = 100)
+
+# подгоняем серию моделей ридж-регрессии
+ridge.mod <- glmnet(x, y, alpha = 0, lambda = grid)
+
+# размерность матрицы коэффициентов моделей
+dim(coef(ridge.mod))
+
+# значение лямбда под номером 50
+round(ridge.mod$lambda[50], 0)
+
+# коэффициенты соответствующей модели
+round(coef(ridge.mod)[, 50], 3)
+
+# норма эль-два
+round(sqrt(sum(coef(ridge.mod)[-1, 50]^2)), 2)
+
+# всё то же для лямбды под номером 60
+# значение лямбда под номером 50
+round(ridge.mod$lambda[60], 0)
+
+# коэффициенты соответствующей модели
+round(coef(ridge.mod)[, 60], 3)
+
+# норма эль-два
+round(sqrt(sum(coef(ridge.mod)[-1, 60]^2)), 1)
+
+# мы можем получить значения коэффициентов для новой лямбды
+round(predict(ridge.mod, s = 50, type = 'coefficients')[1:20, ], 3)
+```
+
+### Метод проверочной выборки   
+
+```{r}
+set.seed(my.seed)
+train <- sample(1:nrow(x), nrow(x)/2)
+test <- -train
+y.test <- y[test]
+
+# подгоняем ридж-модели с большей точностью (thresh ниже значения по умолчанию)
+ridge.mod <- glmnet(x[train, ], y[train], alpha = 0, lambda = grid,
+                    thresh = 1e-12)
+plot(ridge.mod)
+
+# прогнозы для модели с лямбда = 4
+ridge.pred <- predict(ridge.mod, s = 4, newx = x[test, ])
+round(mean((ridge.pred - y.test)^2), 0)
+
+# сравним с MSE для нулевой модели (прогноз = среднее)
+round(mean((mean(y[train]) - y.test)^2), 0)
+
+# насколько модель с лямбда = 4 отличается от обычной ПЛР
+ridge.pred <- predict(ridge.mod, s = 0, newx = x[test, ], exact = T,
+                      x = x[train, ], y = y[train])
+round(mean((ridge.pred - y.test)^2), 0)
+
+# predict с лямбдой (s) = 0 даёт модель ПЛР
+lm(y ~ x, subset = train)
+
+round(predict(ridge.mod, s = 0, exact = T, type = 'coefficients',
+              x = x[train, ], y = y[train])[1:20, ], 3)
+```
+
+### Подбор оптимального значения лямбда с помощью перекрёстной проверки    
+
+```{r}
+# k-кратная кросс-валидация
+set.seed(my.seed)
+# оценка ошибки
+cv.out <- cv.glmnet(x[train, ], y[train], alpha = 0)
+plot(cv.out)
+# значение лямбда, обеспечивающее минимальную ошибку перекрёстной проверки
+bestlam <- cv.out$lambda.min
+round(bestlam, 0)
+
+# MSE на тестовой для этого значения лямбды
+ridge.pred <- predict(ridge.mod, s = bestlam, newx = x[test, ])
+round(mean((ridge.pred - y.test)^2), 0)
+
+# наконец, подгоняем модель для оптимальной лямбды, 
+#  найденной по перекрёстной проверке
+out <- glmnet(x, y, alpha = 0)
+round(predict(out, type = 'coefficients', s = bestlam)[1:20, ], 3)
+```
+
+## 6.6.2 Лассо   
+
+```{r}
+lasso.mod <- glmnet(x[train, ], y[train], alpha = 1, lambda = grid)
+plot(lasso.mod)
+```
+
+### Подбор оптимального значения лямбда с помощью перекрёстной проверки   
+
+```{r}
+set.seed(my.seed)
+cv.out <- cv.glmnet(x[train, ], y[train], alpha = 1)
+plot(cv.out)
+bestlam <- cv.out$lambda.min
+lasso.pred <- predict(lasso.mod, s = bestlam, newx = x[test, ])
+round(mean((lasso.pred - y.test)^2), 0)
+
+# коэффициенты лучшей модели
+out <- glmnet(x, y, alpha = 1, lambda = grid)
+lasso.coef <- predict(out, type = 'coefficients',
+                      s = bestlam)[1:20, ]
+round(lasso.coef, 3)
+
+round(lasso.coef[lasso.coef != 0], 3)
+```
+
+
+# Лабораторная работа 3: регрессия при помощи методов PCR и PLS    
+
+## 6.7.1 Регрессия на главные компоненты   
+
+```{r}
+# кросс-валидация 
+set.seed(2)   # непонятно почему они сменили зерно; похоже, опечатка
+pcr.fit <- pcr(Salary ~ ., data = Hitters, scale = T, validation = 'CV')
+summary(pcr.fit)
+
+# график ошибок
+validationplot(pcr.fit, val.type = 'MSEP')
+```
+
+
+### Подбор оптиального M: кросс-валидация на обучающей выборке    
+
+```{r}
+set.seed(my.seed)
+pcr.fit <- pcr(Salary ~ ., data = Hitters, subset = train, scale = T,
+               validation = 'CV')
+validationplot(pcr.fit, val.type = 'MSEP')
+
+# MSE на тестовой выборке
+pcr.pred <- predict(pcr.fit, x[test, ], ncomp = 7)
+round(mean((pcr.pred - y.test)^2), 0)
+
+# подгоняем модель на всей выборке для M = 7 
+#  (оптимально по методу перекрёстной проверки)
+pcr.fit <- pcr(y ~ x, scale = T, ncomp = 7)
+summary(pcr.fit)
+```
+
+## 6.7.2 Регрессия по методу частных наименьших квадратов   
+
+```{r}
+set.seed(my.seed)
+pls.fit <- plsr(Salary ~ ., data = Hitters, subset = train, scale = T,
+                validation = 'CV')
+summary(pls.fit)
+
+# теперь подгоняем модель для найденного оптимального M = 2 
+#  и оцениваем MSE на тестовой
+pls.pred <- predict(pls.fit, x[test, ], ncomp = 2)
+round(mean((pls.pred - y.test)^2), 0)
+
+# подгоняем модель на всей выборке
+pls.fit <- plsr(Salary ~ ., data = Hitters, scale = T, ncomp = 2)
+summary(pls.fit)
+```
+
+
+## Упражнение 6   
+
+**1** Примените указанные в варианте метод к набору данных по своему варианту (см. таблицу ниже). Выберите оптимальную модель с помощью кросс-валидации. Выведите её коэффициенты с помощью функции coef(). Рассчитайте MSE модели на тестовой выборке.   
+
+**2** Примените указанные в варианте метод к набору данных по своему варианту (см. таблицу ниже). Для модели:   
+ - Подогнать модель на всей выборке и вычислить ошибку (MSE) с кросс-валидацией. По наименьшей MSE подобрать оптимальное значение настроечного параметра метода (гиперпараметр λ или число главных компонент M).
+ - Подогнать модель с оптимальным значением параметра на обучающей выборке, посчитать MSE на тестовой.   
+ - Подогнать модель с оптимальным значением параметра на всех данных, вывести характеристики модели функцией summary().    
+ 
+**3** Сравните оптимальные модели, полученные в заданиях 1 и 2 по MSE на тестовой выборке. Какой метод дал лучший результат?
+Доля тестовой выборки: 50%.   
+
+**Как сдавать:** прислать на почту преподавателя ссылки:
+* на html-отчёт с видимыми блоками кода (блоки кода с параметром echo = T), размещённый на [rpubs.com](rpubs.com).   
+* на код, генерирующий отчёт, в репозитории на [github.com](github.com).
+В текст отчёта включить постановку задачи и ответы на вопросы задания.  
+
+## Варианты
+
+<table border="1">
+<tr>
+<td><b>Номер варианта</b></td>
+<td><b>Данные</b></td>
+<td><b>Зависимая переменная</b></td>
+<td><b>Объясняющие переменные</b></td>
+<td><b>Методы для задания 1</b></td>
+<td><b>Методы для задания 2</b></td>
+</tr>
+
+<tr>
+<td>1</td>
+<td>`Boston {MASS}`</td>
+<td>`crim`</td>
+<td>все остальные</td>
+<td>отбор оптимального подмножества</td>
+<td>гребневая регрессия</td>
+</tr>
+
+<tr>
+<td>2</td>
+<td>`Boston {MASS}`</td>
+<td>`crim`</td>
+<td>все остальные</td>
+<td>отбор путём пошагового исключения</td>
+<td>частный метод наименьших квадратов</td>
+</tr>
+
+<tr>
+<td>3</td>
+<td>`Boston {MASS}`</td>
+<td>`crim`</td>
+<td>все остальные</td>
+<td>отбор путём пошагового включения</td>
+<td>лассо-регрессия</td>
+</tr>
+
+<tr>
+<td>4</td>
+<td>`Auto {ISLR}`</td>
+<td>`mpg`</td>
+<td>все остальные, кроме `name`</td>
+<td>отбор оптимального подмножества</td>
+<td>регрессия на главные компоненты</td>
+</tr>
+
+<tr>
+<td>5</td>
+<td>`Auto {ISLR}`</td>
+<td>`mpg`</td>
+<td>все остальные, кроме `name`</td>
+<td>отбор путём пошагового исключения</td>
+<td>гребневая регрессия</td>
+</tr>
+
+<tr>
+<td>6</td>
+<td>`Auto {ISLR}`</td>
+<td>`mpg`</td>
+<td>все остальные, кроме `name`</td>
+<td>отбор путём пошагового включения</td>
+<td>частный метод наименьших квадратов</td>
+</tr>
+
+<tr>
+<td>7</td>
+<td>`Carseats {ISLR}`</td>
+<td>`Sales`</td>
+<td>все остальные</td>
+<td>отбор оптимального подмножества</td>
+<td>лассо-регрессия</td>
+</tr>
+
+<tr>
+<td>8</td>
+<td>`Carseats {ISLR}`</td>
+<td>`Sales`</td>
+<td>все остальные</td>
+<td>отбор путём пошагового исключения</td>
+<td>регрессия на главные компоненты</td>
+</tr>
+
+<tr>
+<td>9</td>
+<td>`Carseats  {ISLR}`</td>
+<td>`Sales`</td>
+<td>все остальные</td>
+<td>отбор путём пошагового включения</td>
+<td>гребневая регрессия</td>
+</tr>
+
+<tr>
+<td>10</td>
+<td>`College {ISLR}`</td>
+<td>`Accept`</td>
+<td>все остальные</td>
+<td>отбор оптимального подмножества</td>
+<td>частный метод наименьших квадратов</td>
+</tr>
+
+<tr>
+<td>11</td>
+<td>`College {ISLR}`</td>
+<td>`Accept`</td>
+<td>все остальные</td>
+<td>отбор путём пошагового исключения</td>
+<td>лассо-регрессия</td>
+</tr>
+
+<tr>
+<td>12</td>
+<td>`College {ISLR}`</td>
+<td>`Accept`</td>
+<td>все остальные</td>
+<td>отбор путём пошагового включения</td>
+<td>регрессия на главные компоненты</td>
+</tr>
+
+</table>
+
+
+
+*Источники*   
+
+1. *Джеймс Г., Уиттон Д., Хасти Т., Тибширани Р.* Введение в статистическое обучение с примерами на языке R / пер. с англ. С.Э. Мастицкого. -- М.: ДМК Пресс, **2016** -- 450 с. Репозиторий с примерами к книге на русском языке: [https://github.com/ranalytics/islr-ru](https://github.com/ranalytics/islr-ru)    
