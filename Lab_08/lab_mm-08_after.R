@@ -42,7 +42,7 @@ head(Carseats)
 # Выращиваем ===================================================================
 
 # модель бинарного  дерева
-tree.carseats <- 
+tree.carseats <- tree(High ~ . -Sales, Carseats)
 summary(tree.carseats)
 
 # график результата
@@ -57,27 +57,27 @@ tree.carseats                    # посмотреть всё дерево в �
 set.seed(my.seed)
 
 # обучающая выборка
-train <- 
+train <- sample(1:nrow(Carseats), 200)
 
 # тестовая выборка
-Carseats.test <- 
-High.test <- 
+Carseats.test <- Carseats[-train,]
+High.test <- High[-train]
 
 # строим дерево на обучающей выборке
-tree.carseats <- 
+tree.carseats <- tree(High ~ . -Sales, Carseats, subset = train)
 
 
 # Оцениваем точность ###########################################################
 
 # делаем прогноз
-tree.pred <- 
+tree.pred <- predict(tree.carseats, Carseats.test, type = "class")
 
 # матрица неточностей
-tbl <- 
+tbl <- table(tree.pred, High.test)
 tbl
 
 # ACC на тестовой
-acc.test <- 
+acc.test <- sum(diag(tbl))/sum(tbl)
 names(acc.test)[length(acc.test)] <- 'Carseats.class.tree.all'
 acc.test
 
@@ -85,7 +85,7 @@ acc.test
 # Готовимся к обрезке дерева ===================================================
 
 set.seed(my.seed)
-cv.carseats <- 
+cv.carseats <- cv.tree(tree.carseats, FUN = prune.misclass)
 # имена элементов полученного объекта
 names(cv.carseats)
 # сам объект
@@ -95,22 +95,22 @@ cv.carseats
 
 # 1. ошибка с кросс-валидацией в зависимости от числа узлов
 par(mfrow = c(1, 2))
-plot(, , type = "b",
+plot(cv.carseats$size, cv.carseats$dev, type = "b",
      ylab = 'Частота ошибок с кросс-вал. (dev)',
      xlab = 'Число узлов (size)')
 # размер дерева с минимальной ошибкой
-opt.size <- 
-abline(, col = 'red', 'lwd' = 2)     # соотв. вертикальная прямая
+opt.size <- cv.carseats$size[cv.carseats$dev == min(cv.carseats$dev)]
+abline(v = opt.size, col = 'red', 'lwd' = 2)     # соотв. вертикальная прямая
 mtext(opt.size, at = opt.size, side = 1, col = 'red', line = 1)
 
 # 2. ошибка с кросс-валидацией в зависимости от штрафа на сложность
-plot(, , type = "b",
+plot(cv.carseats$k, cv.carseats$dev, type = "b",
      ylab = 'Частота ошибок с кросс-вал. (dev)',
      xlab = 'Штраф за сложность (k)')
 
 
 # Обрезаем: дерево с 9 узлами ##################################################
-prune.carseats <- 
+prune.carseats <- prune.misclass(tree.carseats, best = 9)
 
 # визуализация
 plot(prune.carseats)
@@ -132,7 +132,7 @@ names(acc.test)[length(acc.test)] <- 'Carseats.class.tree.9'
 acc.test
 
 # Обрезаем: дерево с 15 узлами #################################################
-prune.carseats <- 
+prune.carseats <- prune.misclass(tree.carseats, best = 15)
 
 # визуализация
 plot(prune.carseats)
@@ -176,7 +176,7 @@ train <- sample(1:nrow(Boston), nrow(Boston)/2) # обучающая выбор�
 
 # Обучаем модель ###############################################################
 
-tree.boston <- 
+tree.boston <- tree(medv ~ ., Boston, subset = train)
 summary(tree.boston)
 
 # визуализация
@@ -184,7 +184,7 @@ plot(tree.boston)
 text(tree.boston, pretty = 0)
 
 # обрезка дерева
-cv.boston <- 
+cv.boston <- cv.tree(tree.boston)
 
 # размер дерева с минимальной ошибкой
 plot(cv.boston$size, cv.boston$dev, type = 'b')
@@ -193,7 +193,7 @@ abline(v = opt.size, col = 'red', 'lwd' = 2)     # соотв. вертикал�
 mtext(opt.size, at = opt.size, side = 1, col = 'red', line = 1)
 
 # дерево с 7 узлами
-prune.boston <-  
+prune.boston <- prune.tree(tree.boston, best = 7)
 
 # визуализация
 plot(prune.boston)
@@ -203,16 +203,16 @@ text(prune.boston, pretty = 0)
 # Оцениваем точность ###########################################################
 
 # прогноз по лучшей модели (9 узлов)
-yhat <- 
-boston.test <- 
+yhat <- predict(tree.boston, newdata = Boston[-train, ])
+boston.test <- Boston[-train, "medv"]
 
 # график "прогноз -- реализация"
-plot(, )
+plot(yhat, boston.test)
 # линия идеального прогноза
-abline(, )
+abline(0, 1)
 
 # MSE на тестовой выборке
-mse.test <- 
+mse.test <- mean((yhat - boston.test)^2)
 names(mse.test)[length(mse.test)] <- 'Boston.regr.tree.9'
 mse.test
 
@@ -220,7 +220,7 @@ mse.test
 # Обучаем модель ###############################################################
 
 # дерево с 5 узлами
-prune.boston <- 
+prune.boston <- prune.tree(tree.boston, best = 5)
 
 
 # Оцениваем точность ###########################################################
@@ -241,7 +241,8 @@ mse.test
 
 # бэггинг с 13 предикторами
 set.seed(my.seed)
-bag.boston <- 
+bag.boston <- randomForest(medv ~ ., data = Boston, subset = train, 
+                           mtry = 13, importance = TRUE)
 bag.boston
 
 
@@ -264,7 +265,8 @@ mse.test
 # Обучаем модель ###############################################################
 
 # бэггинг с 13 предикторами и 25 деревьями
-bag.boston <- 
+bag.boston <- randomForest(medv ~ ., data = Boston, subset = train,
+                           mtry = 13, ntree = 25)
 
 
 # Оцениваем точность ###########################################################
@@ -283,7 +285,8 @@ mse.test
 
 # Обучаем модель ###############################################################
 set.seed(my.seed)
-rf.boston <- 
+rf.boston <- randomForest(medv ~ ., data = Boston, subset = train,
+                          mtry = 6, importance = TRUE)
 
 
 # Оцениваем точность ###########################################################
@@ -307,7 +310,8 @@ varImpPlot(rf.boston)  # графики
 # Обучаем модель ###############################################################
 
 set.seed(my.seed)
-boost.boston <- 
+boost.boston <- gbm(medv ~ ., data = Boston[train, ], distribution = "gaussian",
+                    n.trees = 5000, interaction.depth = 4)
 # график и таблица относительной важности переменных
 summary(boost.boston)
 
@@ -320,7 +324,7 @@ plot(boost.boston, i = "lstat")
 # Оцениваем точность ###########################################################
 
 # прогноз
-yhat.boost <- 
+yhat.boost <- predict(boost.boston, newdata = Boston[-train, ], n.trees = 5000)
 
 # MSE на тестовой
 mse.test <- c(mse.test, mean((yhat.boost - boston.test)^2))
@@ -331,7 +335,9 @@ mse.test
 # Обучаем модель ###############################################################
 
 # меняем значение гиперпараметра (lambda) на 0.2 -- аргумент shrinkage
-boost.boston <- 
+boost.boston <- gbm(medv ~ ., data = Boston[train, ], distribution = "gaussian",
+                    n.trees = 5000, interaction.depth = 4, 
+                    shrinkage = 0.2, verbose = F)
 
 
 # Оцениваем точность ###########################################################
