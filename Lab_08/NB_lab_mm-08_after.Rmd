@@ -1,0 +1,530 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+  word_document: default
+---
+
+## Математическое моделирование
+
+### Практика 8
+
+### Модели на основе деревьев      
+
+В практических примерах ниже показано как:   
+
+* строить регрессионные деревья;    
+* строить деревья классификации;   
+* делать обрезку дерева;    
+* использовать бэггинг, бустинг, случайный лес для улучшения качества прогнозирования.    
+
+*Модели*: деревья решений.   
+*Данные*: `Sales {ISLR}`, `Boston {MASS}`   
+
+Подробные комментарии к коду лабораторных см. в [1], глава 8.   
+
+```{r, warning = F, message = F}
+# Загрузка пакетов
+library('tree')              # деревья tree()
+library('ISLR')              # набор данных Carseats
+library('GGally')            # матричный график разброса ggpairs()
+library('MASS')              # набор данных Boston
+library('randomForest')      # случайный лес randomForest()
+library('gbm')               # бустинг gbm()
+
+# ядро генератора случайных чисел
+my.seed <- 2
+```
+
+
+## Деревья решений    
+
+Загрузим таблицу с данными по продажам детских кресел и добавим к ней переменную `High` -- "высокие продажи" со значениями:   
+
+* `Yes` если продажи больше 8 (тыс. шт.);       
+* `No` в противном случае.   
+
+```{r, warning = F}
+
+# ?Carseats
+head(Carseats)
+
+# новая переменная
+High <- ifelse(Carseats$Sales <= 8, "No", "Yes")
+
+# присоединяем к таблице данных
+Carseats <- cbind(Carseats, High)
+
+# матричные графики разброса переменных
+p <- ggpairs(Carseats[, c(12, 1:4)], aes(color = High))
+suppressMessages(print(p))
+p <- ggpairs(Carseats[, c(12, 5:8)], aes(color = High))
+suppressMessages(print(p))
+p <- ggpairs(Carseats[, c(12, 9:11)], aes(color = High))
+suppressMessages(print(p))
+```
+
+Судя по графикам, переменная классы `No` и `Yes` переменной High сопоставимы по размерам. Классы на графиках разброса объясняющих переменных сильно смешаны, поэтому модели с непрерывной разрешающей границей вряд ли сработают хорошо. Построим дерево для категориального отклика `High`, отбросив непрерывный отклик `Sales` (мы оставили его на первом графике, чтобы проверить, как сработало разделение по значению `Sales = 8`).    
+
+
+```{r, cache = T}
+# модель бинарного  дерева
+tree.carseats <- tree(High ~ . -Sales, Carseats)
+summary(tree.carseats)
+
+# график результата
+plot(tree.carseats)              # ветви
+text(tree.carseats, pretty = 0)  # подписи
+tree.carseats                    # посмотреть всё дерево в консоли
+```
+
+Теперь построим дерево на обучающей выборке и оценим ошибку на тестовой.   
+
+```{r, cache = T}
+# ядро генератора случайных чисел
+set.seed(my.seed)
+
+# обучающая выборка
+train <- sample(1:nrow(Carseats), 200)
+
+# тестовая выборка
+Carseats.test <- Carseats[-train,]
+High.test <- High[-train]
+
+# строим дерево на обучающей выборке
+tree.carseats <- tree(High ~ . -Sales, Carseats, subset = train)
+
+# делаем прогноз
+tree.pred <- predict(tree.carseats, Carseats.test, type = "class")
+
+# матрица неточностей
+tbl <- table(tree.pred, High.test)
+tbl
+
+# ACC на тестовой
+acc.test <- sum(diag(tbl))/sum(tbl)
+names(acc.test)[length(acc.test)] <- 'Carseats.class.tree.all'
+acc.test
+```
+
+Обобщённая характеристика точности: доля верных прогнозов: `r round(acc.test, 2)`.  
+
+Теперь обрезаем дерево, используя в качестве критерия частоту ошибок классификации. Функция `cv.tree()`  проводит кросс-валидацию для выбора лучшего дерева, аргумент `prune.misclass` означает, что мы минимизируем ошибку классификации.   
+
+```{r, cache = T}
+set.seed(my.seed)
+cv.carseats <- cv.tree(tree.carseats, FUN = prune.misclass)
+# имена элементов полученного объекта
+names(cv.carseats)
+# сам объект
+cv.carseats
+
+# графики изменения параметров метода по ходу обрезки дерева ###################
+
+# 1. ошибка с кросс-валидацией в зависимости от числа узлов
+par(mfrow = c(1, 2))
+plot(cv.carseats$size, cv.carseats$dev, type = "b",
+     ylab = 'Частота ошибок с кросс-вал. (dev)',
+     xlab = 'Число узлов (size)')
+# размер дерева с минимальной ошибкой
+opt.size <- cv.carseats$size[cv.carseats$dev == min(cv.carseats$dev)]
+abline(v = opt.size, col = 'red', 'lwd' = 2)     # соотв. вертикальная прямая
+mtext(opt.size, at = opt.size, side = 1, col = 'red', line = 1)
+
+# 2. ошибка с кросс-валидацией в зависимости от штрафа на сложность
+plot(cv.carseats$k, cv.carseats$dev, type = "b",
+     ylab = 'Частота ошибок с кросс-вал. (dev)',
+     xlab = 'Штраф за сложность (k)')
+```
+
+Как видно на графике слева, минимум частоты ошибок достигается при числе узлов 9. Оценим точность дерева с 9 узлами.    
+
+```{r, cache = T}
+# дерево с 9 узлами
+prune.carseats <- prune.misclass(tree.carseats, best = 9)
+
+# визуализация
+plot(prune.carseats)
+text(prune.carseats, pretty = 0)
+
+# прогноз на тестовую выборку
+tree.pred <- predict(prune.carseats, Carseats.test, type = "class")
+
+# матрица неточностей
+tbl <- table(tree.pred, High.test)
+tbl
+
+# ACC на тестовой
+acc.test <- c(acc.test, sum(diag(tbl))/sum(tbl))
+names(acc.test)[length(acc.test)] <- 'Carseats.class.tree.9'
+acc.test
+```
+
+Точность этой модели чуть выше точности исходного дерева и составляет `r round(acc.test, 2)`. Увеличив количество узлов, получим более глубокое дерево, но менее точное.    
+
+```{r, cache = T}
+# дерево с 15 узлами
+prune.carseats <- prune.misclass(tree.carseats, best = 15)
+
+# визуализация
+plot(prune.carseats)
+text(prune.carseats, pretty = 0)
+
+# прогноз на тестовую выборку
+tree.pred <- predict(prune.carseats, Carseats.test, type = "class")
+
+# матрица неточностей
+tbl <- table(tree.pred, High.test)
+tbl
+
+# ACC на тестовой
+acc.test <- c(acc.test, sum(diag(tbl))/sum(tbl))
+names(acc.test)[length(acc.test)] <- 'Carseats.class.tree.15'
+acc.test
+
+# сбрасываем графические параметры
+par(mfrow = c(1, 1))
+```
+
+
+
+## Регрессионные деревья    
+
+Воспользуемся набором данных `Boston`.   
+
+```{r, warning = F}
+# ?Boston
+head(Boston)
+
+# матричные графики разброса переменных
+p <- ggpairs(Boston[, c(14, 1:4)])
+suppressMessages(print(p))
+p <- ggpairs(Boston[, c(14, 5:8)])
+suppressMessages(print(p))
+p <- ggpairs(Boston[, c(14, 9:13)])
+suppressMessages(print(p))
+
+# обучающая выборка
+set.seed(my.seed)
+train <- sample(1:nrow(Boston), nrow(Boston)/2) # обучающая выборка -- 50%
+```
+
+Построим дерево регрессии для зависимой переменной `medv`: медианная стоимости домов, в которых живут собственники (тыс. долл.).    
+
+```{r, cache = T}
+# обучаем модель
+tree.boston <- tree(medv ~ ., Boston, subset = train)
+summary(tree.boston)
+
+# визуализация
+plot(tree.boston)
+text(tree.boston, pretty = 0)
+```
+
+Снова сделаем обрезку дерева в целях улучшения качества прогноза.    
+
+```{r, cache = T}
+# обрезка дерева
+cv.boston <- cv.tree(tree.boston)
+
+# размер дерева с минимальной ошибкой
+plot(cv.boston$size, cv.boston$dev, type = 'b')
+opt.size <- cv.boston$size[cv.boston$dev == min(cv.boston$dev)]
+abline(v = opt.size, col = 'red', 'lwd' = 2)     # соотв. вертикальная прямая
+mtext(opt.size, at = opt.size, side = 1, col = 'red', line = 1)
+```
+
+В данном случаем минимум ошибки соответствует самому сложному дереву, с 8 узлами. Покажем, как при желании можно обрезать дерево до 7 узлов (ошибка ненамного выше, чем минимальная).   
+
+```{r, cache = T}
+# дерево с 7 узлами
+prune.boston = prune.tree(tree.boston, best = 7)
+
+# визуализация
+plot(prune.boston)
+text(prune.boston, pretty = 0)
+```
+
+Прогноз сделаем по необрезанному дереву, т.к. там ошибка, оцененная по методу перекрёстной проверки, минимальна.    
+
+```{r, cache = T}
+# прогноз по лучшей модели (9 узлов)
+yhat <- predict(tree.boston, newdata = Boston[-train, ])
+boston.test <- Boston[-train, "medv"]
+
+# график "прогноз -- реализация"
+plot(yhat, boston.test)
+# линия идеального прогноза
+abline(0, 1)
+
+# MSE на тестовой выборке
+mse.test <- mean((yhat - boston.test)^2)
+names(mse.test)[length(mse.test)] <- 'Boston.regr.tree.9'
+mse.test
+```
+
+MSE на тестовой выборке равна `r round(mse.test['Boston.regr.tree.9'], 2)` (тыс.долл.).    
+
+
+## Бэггинг и метод случайного леса    
+
+Рассмотрим более сложные методы улучшения качества дерева. Бэггинг -- частный случай случайного леса с $m = p$, поэтому и то, и другое можно построить функцией `randomForest()`.    
+
+Для начала используем *бэггинг*, причём возьмём все 13 предикторов на каждом шаге (аргумент `mtry`).   
+
+```{r, cache = T}
+# бэггинг с 13 предикторами
+set.seed(my.seed)
+bag.boston <- randomForest(medv ~ ., data = Boston, subset = train, 
+                           mtry = 13, importance = TRUE)
+bag.boston
+
+# прогноз
+yhat.bag = predict(bag.boston, newdata = Boston[-train, ])
+
+# график "прогноз -- реализация"
+plot(yhat.bag, boston.test)
+# линия идеального прогноза
+abline(0, 1)
+
+# MSE на тестовой
+mse.test <- c(mse.test, mean((yhat.bag - boston.test)^2))
+names(mse.test)[length(mse.test)] <- 'Boston.bag.13'
+mse.test
+```
+
+Ошибка на тестовой выборке равна `r round(mse.test['Boston.bag.13'], 2)`.   
+Можно изменить число деревьев с помощью аргумента `ntree`.   
+
+```{r, cache = T}
+# бэггинг с 13 предикторами и 25 деревьями
+bag.boston <- randomForest(medv ~ ., data = Boston, subset = train,
+                           mtry = 13, ntree = 25)
+
+# прогноз
+yhat.bag <- predict(bag.boston, newdata = Boston[-train, ])
+
+# MSE на тестовой
+mse.test <- c(mse.test, mean((yhat.bag - boston.test)^2))
+names(mse.test)[length(mse.test)] <- 'Boston.bag.13.25'
+mse.test
+```
+
+Но, как видно, это только ухудшает прогноз.    
+Теперь попробуем вырастить случайный лес. Берём 6 предикторов на каждом шаге.   
+
+```{r, cache = T}
+# обучаем модель
+set.seed(my.seed)
+rf.boston <- randomForest(medv ~ ., data = Boston, subset = train,
+                          mtry = 6, importance = TRUE)
+
+# прогноз
+yhat.rf <- predict(rf.boston, newdata = Boston[-train, ])
+
+# MSE на тестовой выборке
+mse.test <- c(mse.test, mean((yhat.rf - boston.test)^2))
+names(mse.test)[length(mse.test)] <- 'Boston.rf.6'
+mse.test
+
+# важность предикторов
+importance(rf.boston)  # оценки 
+varImpPlot(rf.boston)  # графики
+```
+
+Ошибка по модели случайного леса равна `r round(mse.test['Boston.rf.6'], 2)`, что ниже, чем для бэггинга.   
+
+## Бустинг    
+
+Построим 5000 регрессионных деревьев с глубиной 4.   
+
+```{r, cache = T}
+set.seed(my.seed)
+boost.boston <- gbm(medv ~ ., data = Boston[train, ], distribution = "gaussian",
+                    n.trees = 5000, interaction.depth = 4)
+# график и таблица относительной важности переменных
+summary(boost.boston)
+
+# графики частной зависимости для двух наиболее важных предикторов
+par(mfrow = c(1, 2))
+plot(boost.boston, i = "rm")
+plot(boost.boston, i = "lstat")
+
+# прогноз
+yhat.boost <- predict(boost.boston, newdata = Boston[-train, ], n.trees = 5000)
+
+# MSE на тестовой
+mse.test <- c(mse.test, mean((yhat.boost - boston.test)^2))
+names(mse.test)[length(mse.test)] <- 'Boston.boost.opt'
+mse.test
+```
+
+Настройку бустинга можно делать с помощью гиперпараметра $\lambda$ (аргумент `shrinkage`). Установим его равным 0.2.   
+
+```{r, cache = T}
+# меняем значение гиперпараметра (lambda) на 0.2 -- аргумент shrinkage
+boost.boston <- gbm(medv ~ ., data = Boston[train, ], distribution = "gaussian",
+                    n.trees = 5000, interaction.depth = 4, 
+                    shrinkage = 0.2, verbose = F)
+
+# прогноз
+yhat.boost <- predict(boost.boston, newdata = Boston[-train, ], n.trees = 5000)
+
+# MSE а тестовой
+mse.test <- c(mse.test, mean((yhat.boost - boston.test)^2))
+names(mse.test)[length(mse.test)] <- 'Boston.boost.0.2'
+mse.test
+```
+
+Таким образом, изменив гиперпараметр, мы ещё немного снизили ошибку прогноза.   
+
+
+## Упражнение 8   
+
+Необходимо построить две модели для прогноза на основе дерева решений:  
+* для непрерывной зависимой переменной;
+* для категориальной зависимой переменной.   
+Данные и переменные указаны в таблице с вариантами.   
+Ядро генератора случайных чисел -- номер варианта.   
+
+**Задания**
+Для каждой модели:   
+1. Указать настроечные параметры метода из своего варианта (например: количество узлов, количество предикторов, скорость обучения).    
+2. Подогнать модель на обучающей выборке (50% наблюдений). Рассчитать MSE на тестовой выборке.       
+3. Перестроить модель с помощью метода, указанного в варианте.    
+4. Сделать прогноз по модели с подобранными в п.3 параметрами на тестовой выборке, оценить его точность и построить график «прогноз-реализация».    
+
+**Как сдавать:** прислать на почту преподавателя ссылки:
+* на html-отчёт с видимыми блоками кода (блоки кода с параметром echo = T), размещённый на [rpubs.com](rpubs.com).   
+* на код, генерирующий отчёт, в репозитории на [github.com](github.com).
+В текст отчёта включить постановку задачи и ответы на вопросы задания.  
+
+## Варианты
+
+<table border="1">
+<tr>
+<td align="center"><b>Номер варианта</b></td>
+<td align="center"><b>Данные</b></td>
+<td align="center"><b>Непрерывный $Y$</b></td>
+<td align="center"><b>Категориальный $Y$</b></td>
+<td align="center"><b>Объясняющие переменные</b></td>
+<td align="center"><b>Метод подгонки моделей</b></td>
+</tr>
+
+<tr>
+<td>1</td>
+<td>`Boston {MASS}`</td>
+<td>$medv$</td>
+<td>$high.medv = \begin{cases} \begin{array}{lcl} 1, & если & medv >= 25 \\ 0, & если & medv < 25 \end{array} \end{cases}$</td>
+<td>все остальные</td>
+<td>дерево с обрезкой ветвей</td>
+</tr>
+
+<tr>
+<td>2</td>
+<td>`Boston {MASS}`</td>
+<td>$medv$</td>
+<td>$high.medv = \begin{cases} \begin{array}{lcl} 1, & если & medv >= 25 \\ 0, & если & medv < 25 \end{array} \end{cases}$</td>
+<td>все остальные</td>
+<td>бэггинг</td>
+</tr>
+
+<tr>
+<td>3</td>
+<td>`Boston {MASS}`</td>
+<td>$medv$</td>
+<td>$high.medv = \begin{cases} \begin{array}{lcl} 1, & если & medv >= 25 \\ 0, & если & medv < 25 \end{array} \end{cases}$</td>
+<td>все остальные</td>
+<td>случайный лес</td>
+</tr>
+
+<tr>
+<td>4</td>
+<td>`Boston {MASS}`</td>
+<td>$medv$</td>
+<td>$high.medv = \begin{cases} \begin{array}{lcl} 1, & если & medv >= 25 \\ 0, & если & medv < 25 \end{array} \end{cases}$</td>
+<td>все остальные</td>
+<td>бустинг</td>
+</tr>
+
+<tr>
+<td>5</td>
+<td>`Wage {ISLR}`</td>
+<td>$wage$</td>
+<td>$high.wage = \begin{cases} \begin{array}{lcl} 1, & если & wage >= 128.68 \\ 0, & если & wage < 128.68 \end{array} \end{cases}$</td>
+<td>остальные, кроме $region$, $logwage$</td>
+<td>дерево с обрезкой ветвей</td>
+</tr>
+
+<tr>
+<td>6</td>
+<td>`Wage {ISLR}`</td>
+<td>$wage$</td>
+<td>$high.wage = \begin{cases} \begin{array}{lcl} 1, & если & wage >= 128.68 \\ 0, & если & wage < 128.68 \end{array} \end{cases}$</td>
+<td>остальные, кроме $region$, $logwage$</td>
+<td>бэггинг</td>
+</tr>
+
+<tr>
+<td>7</td>
+<td>`Wage {ISLR}`</td>
+<td>$wage$</td>
+<td>$high.wage = \begin{cases} \begin{array}{lcl} 1, & если & wage >= 128.68 \\ 0, & если & wage < 128.68 \end{array} \end{cases}$</td>
+<td>остальные, кроме $region$, $logwage$</td>
+<td>случайный лес</td>
+</tr>
+
+<tr>
+<td>8</td>
+<td>`Wage {ISLR}`</td>
+<td>$wage$</td>
+<td>$high.wage = \begin{cases} \begin{array}{lcl} 1, & если & wage >= 128.68 \\ 0, & если & wage < 128.68 \end{array} \end{cases}$</td>
+<td>остальные, кроме $region$, $logwage$</td>
+<td>бустинг</td>
+</tr>
+
+<tr>
+<td>9</td>
+<td>`Auto {ISLR}`</td>
+<td>$mpg$</td>
+<td>$high.mpg = \begin{cases} \begin{array}{lcl} 1, & если & mpg >= 29 \\ 0, & если & mpg < 29 \end{array} \end{cases}$</td>
+<td>остальные, кроме $name$</td>
+<td>дерево с обрезкой ветвей</td>
+</tr>
+
+<tr>
+<td>10</td>
+<td>`Auto {ISLR}`</td>
+<td>$mpg$</td>
+<td>$high.mpg = \begin{cases} \begin{array}{lcl} 1, & если & mpg >= 29 \\ 0, & если & mpg < 29 \end{array} \end{cases}$</td>
+<td>остальные, кроме $name$</td>
+<td>бэггинг</td>
+</tr>
+
+<tr>
+<td>11</td>
+<td>`Auto {ISLR}`</td>
+<td>$mpg$</td>
+<td>$high.mpg = \begin{cases} \begin{array}{lcl} 1, & если & mpg >= 29 \\ 0, & если & mpg < 29 \end{array} \end{cases}$</td>
+<td>остальные, кроме $name$</td>
+<td>случайный лес</td>
+</tr>
+
+<tr>
+<td>12</td>
+<td>`Auto {ISLR}`</td>
+<td>$mpg$</td>
+<td>$high.mpg = \begin{cases} \begin{array}{lcl} 1, & если & mpg >= 29 \\ 0, & если & mpg < 29 \end{array} \end{cases}$</td>
+<td>остальные, кроме $name$</td>
+<td>бустинг</td>
+</tr>
+
+</table>
+
+
+*Источники*   
+
+1. *Джеймс Г., Уиттон Д., Хасти Т., Тибширани Р.* Введение в статистическое обучение с примерами на языке R / пер. с англ. С.Э. Мастицкого. -- М.: ДМК Пресс, **2016** -- 450 с. Репозиторий с примерами к книге на русском языке: [https://github.com/ranalytics/islr-ru](https://github.com/ranalytics/islr-ru)   
