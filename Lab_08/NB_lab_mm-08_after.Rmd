@@ -251,7 +251,7 @@ text(prune.boston, pretty = 0)
 Прогноз сделаем по необрезанному дереву, т.к. там ошибка, оцененная по методу перекрёстной проверки, минимальна.    
 
 ```{r, cache = T}
-# прогноз по лучшей модели (9 узлов)
+# прогноз по лучшей модели (8 узлов)
 yhat <- predict(tree.boston, newdata = Boston[-train, ])
 boston.test <- Boston[-train, "medv"]
 
@@ -262,11 +262,11 @@ abline(0, 1)
 
 # MSE на тестовой выборке
 mse.test <- mean((yhat - boston.test)^2)
-names(mse.test)[length(mse.test)] <- 'Boston.regr.tree.9'
+names(mse.test)[length(mse.test)] <- 'Boston.regr.tree.8'
 mse.test
 ```
 
-MSE на тестовой выборке равна `r round(mse.test['Boston.regr.tree.9'], 2)` (тыс.долл.).    
+MSE на тестовой выборке равна `r round(mse.test['Boston.regr.tree.8'], 2)` (тыс.долл.).    
 
 
 ## Бэггинг и метод случайного леса    

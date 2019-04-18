@@ -192,7 +192,7 @@ opt.size <- cv.boston$size[cv.boston$dev == min(cv.boston$dev)]
 abline(v = opt.size, col = 'red', 'lwd' = 2)     # соотв. вертикальная прямая
 mtext(opt.size, at = opt.size, side = 1, col = 'red', line = 1)
 
-# дерево с 7 узлами
+# дерево с 7 конечными узлами
 prune.boston <-  
 
 # визуализация
@@ -202,7 +202,7 @@ text(prune.boston, pretty = 0)
 
 # Оцениваем точность ###########################################################
 
-# прогноз по лучшей модели (9 узлов)
+# прогноз по лучшей модели (8 конечных узлов)
 yhat <- 
 boston.test <- 
 
@@ -213,7 +213,7 @@ abline(, )
 
 # MSE на тестовой выборке
 mse.test <- 
-names(mse.test)[length(mse.test)] <- 'Boston.regr.tree.9'
+names(mse.test)[length(mse.test)] <- 'Boston.regr.tree.8'
 mse.test
 
 
