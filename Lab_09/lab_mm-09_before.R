@@ -180,15 +180,28 @@ table(Khan$ytrain)
 table(Khan$ytest)
 
 dat <- data.frame(x = Khan$xtrain, y = as.factor(Khan$ytrain))
-# SVM с линейным ядром
-out <- 
-summary(out)
-# матрица неточностей
-table(out$fitted, dat$y)
 
 # тестовые данные
 dat.te <- data.frame(x = Khan$xtest, y = as.factor(Khan$ytest))
-# прогноз на тестовой выборке
-pred.te <- predict(out, newdata = dat.te)
-# матрица неточностей
-table(pred.te, dat.te$y)
+
+# параметры алгоритма
+kernel.grid <- c('linear', 'polynomial')
+cost.grid <- seq(1, 20, by = 0.5)
+
+AUC <- matrix(0, length(kernel.grid), length(cost.grid))
+
+# SVM 
+for (i in 1:length(kernel.grid)) {
+    print(paste0('Starting ', kernel.grid[i], ' kernel'))
+    for (j in 1:length(cost.grid)) {
+        out <- 
+        # прогноз на тестовой выборке
+        pred.te <- 
+        # матрица неточностей
+        tbl <- 
+        AUC[i, j] <- 
+    }
+}
+
+AUC
+
